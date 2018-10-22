@@ -20,12 +20,12 @@ from dateutil.tz import *
 
 container_instance_ec2_mapping = {}
 
-def putTasks(region, cluster, task):
+def putTasks(region, cluster, task, session):
     id_name = 'taskArn'
     task_id = task["taskArn"]
     new_record = {}
 
-    dynamodb = boto3.resource("dynamodb", region_name=region)
+    dynamodb = session.resource("dynamodb", region_name=region)
     table = dynamodb.Table("ECSTaskStatus")
     saved_task = table.get_item( Key = { id_name : task_id } )
         
@@ -50,7 +50,7 @@ def putTasks(region, cluster, task):
             (new_record['instanceType'], new_record['osType'], new_record['instanceId']) = ('INSTANCE_TYPE_UNKNOWN', 'linux', 'INSTANCE_ID_UNKNOWN')
         else:
             new_record["containerInstanceArn"]  = task["containerInstanceArn"]
-            (new_record['instanceType'], new_record['osType'], new_record['instanceId']) = getInstanceType(region, task['clusterArn'], task['containerInstanceArn'], task['launchType'])
+            (new_record['instanceType'], new_record['osType'], new_record['instanceId']) = getInstanceType(region, task['clusterArn'], task['containerInstanceArn'], task['launchType'], session)
             
         if ':' in task["group"]:
             new_record["group"], new_record["groupName"] = task["group"].split(':')
@@ -67,7 +67,7 @@ def putTasks(region, cluster, task):
         table.put_item( Item=new_record )
         return 0
             
-def getInstanceType(region, cluster, instance, launchType):
+def getInstanceType(region, cluster, instance, launchType, session):
     instanceType    = 'INSTANCE_TYPE_UNKNOWN'
     osType          = 'linux'
     instanceId      = 'INSTANCE_ID_UNKNOWN'
@@ -82,7 +82,7 @@ def getInstanceType(region, cluster, instance, launchType):
         (instanceId, instanceType) = container_instance_ec2_mapping[instance]
         return (instanceType, osType, instanceId)
 
-    ecs = boto3.client("ecs", region_name=region)
+    ecs = session.client("ecs", region_name=region)
     try:
         result = ecs.describe_container_instances(cluster=cluster, containerInstances=[instance])
         if result and 'containerInstances' in result:
@@ -109,15 +109,20 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument('--region',  '-r', required=True, help="AWS Region in which Amazon ECS service is running.")
+    parser.add_argument('--profile',  '-p', required=False, help="Boto config profile to use when connecting to AWS")
     parser.add_argument("-v", "--verbose", action="store_true")
 
     cli_args = parser.parse_args()
     region = cli_args.region
+    session = boto3
 
     if cli_args.verbose:
         logging.basicConfig(level=logging.DEBUG)
 
-    ecs = boto3.client("ecs", region_name=region)
+    if cli_args.profile:
+        session = boto3.session.Session(profile_name=cli_args.profile)
+
+    ecs = session.client("ecs", region_name=region)
     response = ecs.list_clusters()
 
     clusters = []
@@ -142,4 +147,4 @@ if __name__ == "__main__":
         taskDetails = ecs.describe_tasks(cluster=cluster, tasks=[task])
 
         # Get all tasks in the cluster and make an entry in DDB.
-        tasks = putTasks(region, cluster, taskDetails['tasks'][0])
+        tasks = putTasks(region, cluster, taskDetails['tasks'][0], session)
